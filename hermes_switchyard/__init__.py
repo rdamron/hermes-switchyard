@@ -21,6 +21,7 @@ from .client import (
     TYPESAFE_ENDPOINT,
     DecisionClient,
     PartialAccountingError,
+    _selfhosted_endpoint,
     request_budget_scope,
 )
 from . import browser_use, legacy_cleanup
@@ -1415,9 +1416,14 @@ def _secret(provider: str = "auto"):
         "typesafe": ("TYPESAFE_API_KEY",),
         "openrouter": ("OPENROUTER_API_KEY",),
         "auto": ("TYPESAFE_API_KEY", "OPENROUTER_API_KEY"),
+        # A selfhosted route is the operator's own keyless server; it holds no
+        # credential in the secret store and never sends an Authorization header.
+        "selfhosted": (),
     }
     if provider not in names:
-        raise ValueError("jev_provider must be auto, typesafe, or openrouter")
+        raise ValueError(
+            "jev_provider must be auto, typesafe, openrouter, or selfhosted"
+        )
     for name in names[provider]:
         value = str(get_secret(name) or "").strip()
         if value:
@@ -1560,24 +1566,51 @@ def register(ctx):
         provider = "auto" if not provider_explicit else configured_provider
         configured_endpoint = DEFAULT_ENDPOINT if not endpoint_explicit else configured_endpoint_value
         configured_model = ctx_get_config(ctx, "jev_model", default=None)
-        if provider not in {"auto", "typesafe", "openrouter"}:
-            raise ValueError("jev_provider must be auto, typesafe, or openrouter")
-        if configured_endpoint not in {DEFAULT_ENDPOINT, TYPESAFE_ENDPOINT}:
-            raise ValueError("api_endpoint must be one of the fixed Jev endpoints")
+        selfhosted_endpoint = _selfhosted_endpoint(configured_endpoint)
+        if provider not in {"auto", "typesafe", "openrouter", "selfhosted"}:
+            raise ValueError(
+                "jev_provider must be auto, typesafe, openrouter, or selfhosted"
+            )
+        if (
+            configured_endpoint not in {DEFAULT_ENDPOINT, TYPESAFE_ENDPOINT}
+            and not selfhosted_endpoint
+        ):
+            raise ValueError(
+                "api_endpoint must be a fixed Jev endpoint "
+                "or an operator-run http(s) endpoint"
+            )
         if provider_explicit and endpoint_explicit and (
             (provider == "openrouter" and configured_endpoint == TYPESAFE_ENDPOINT)
             or (provider == "typesafe" and configured_endpoint == DEFAULT_ENDPOINT)
+            or (provider in {"typesafe", "openrouter"} and selfhosted_endpoint)
+            or (provider == "selfhosted" and not selfhosted_endpoint)
         ):
             raise ValueError("jev_provider and api_endpoint select different providers")
-        if configured_endpoint != DEFAULT_ENDPOINT:
+        if provider == "selfhosted" and not endpoint_explicit:
+            raise ValueError(
+                "selfhosted jev_provider requires an operator-run api_endpoint"
+            )
+        if selfhosted_endpoint:
+            provider = "selfhosted"
+        elif configured_endpoint != DEFAULT_ENDPOINT:
             provider = "typesafe"
         elif provider == "auto":
             try:
                 provider = "typesafe" if _secret("typesafe") else "openrouter"
             except Exception:
                 provider = "openrouter"
-        endpoint = TYPESAFE_ENDPOINT if provider == "typesafe" else DEFAULT_ENDPOINT
-        model = configured_model or ("jev-latest" if provider == "typesafe" else "typesafe/jev-1.13")
+        if provider == "selfhosted":
+            endpoint = configured_endpoint
+            # The operator names the model their own server resolves; the
+            # client requires the server to echo it exactly on every response.
+            if not configured_model:
+                raise ValueError("selfhosted jev_provider requires jev_model")
+            model = configured_model
+        else:
+            endpoint = TYPESAFE_ENDPOINT if provider == "typesafe" else DEFAULT_ENDPOINT
+            model = configured_model or (
+                "jev-latest" if provider == "typesafe" else "typesafe/jev-1.13"
+            )
         return endpoint, model, provider
 
     def client():

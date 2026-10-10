@@ -35,6 +35,19 @@ TYPESAFE_MODELS = frozenset({"jev-latest", "jev-1.13", "jev-1.13.0"})
 ALLOWED_ENDPOINTS = frozenset({DEFAULT_ENDPOINT, TYPESAFE_ENDPOINT})
 ALLOWED_MODELS = OPENROUTER_MODELS | TYPESAFE_MODELS
 EXPECTED_MODEL = "typesafe/jev-1.13"
+
+
+def _selfhosted_endpoint(endpoint: Any) -> bool:
+    """Return True for an operator-run http(s) endpoint outside the hosted pair.
+
+    A selfhosted endpoint is the operator's own Jev server on the operator's
+    own network. It is never one of the two evidence-backed hosted endpoints,
+    and only an absolute http(s) URL with a host qualifies.
+    """
+    if type(endpoint) is not str or endpoint in ALLOWED_ENDPOINTS:
+        return False
+    parts = urllib.parse.urlsplit(endpoint)
+    return parts.scheme in ("http", "https") and bool(parts.hostname)
 MAX_QUESTIONS_PER_REQUEST = 255
 MAX_REQUEST_BYTES = 96_000
 MAX_RESPONSE_BYTES = 1_048_576
@@ -419,6 +432,11 @@ def _require_public_data_ack(acknowledged: bool = True) -> None:
 def _valid_model_slug(model: Any, endpoint: str | None = None) -> bool:
     if type(model) is not str:
         return False
+    if endpoint is not None and _selfhosted_endpoint(endpoint):
+        # An operator-run server names its own model. Accept a bounded
+        # printable slug; _validate_resolved_model still requires an exact
+        # echo of the configured model on every response.
+        return 0 < len(model) <= 128 and model == model.strip() and model.isprintable()
     if endpoint == DEFAULT_ENDPOINT:
         return model in OPENROUTER_MODELS
     if endpoint == TYPESAFE_ENDPOINT:
@@ -468,8 +486,11 @@ class DecisionClient:
     ):
         if type(api_key) is not str or not api_key.strip():
             raise ValueError("Jev API key is required")
-        if endpoint not in ALLOWED_ENDPOINTS:
-            raise ValueError("Jev endpoint is not an evidence-backed fixed endpoint")
+        if endpoint not in ALLOWED_ENDPOINTS and not _selfhosted_endpoint(endpoint):
+            raise ValueError(
+                "Jev endpoint is not an evidence-backed fixed endpoint "
+                "or an operator-run http(s) endpoint"
+            )
         if not _valid_model_slug(model, endpoint):
             raise ValueError("Jev model is not an evidence-backed allowed alias for this endpoint")
         if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0:
@@ -487,7 +508,7 @@ class DecisionClient:
         self.max_connection_idle_seconds = float(max_connection_idle_seconds)
         self.transport = transport
         self._url = urllib.parse.urlsplit(endpoint)
-        self._connection: http.client.HTTPSConnection | None = None
+        self._connection: http.client.HTTPConnection | None = None
         self._connection_last_used: float | None = None
         # Count of requests replayed after a pooled connection was found closed.
         self.stale_connection_retries = 0
@@ -604,7 +625,12 @@ class DecisionClient:
                 host = self._url.hostname
                 if not host:
                     raise JevRequestError("Jev endpoint has no host", detail="transport_failed")
-                self._connection = http.client.HTTPSConnection(
+                connection_cls = (
+                    http.client.HTTPConnection
+                    if self._url.scheme == "http"
+                    else http.client.HTTPSConnection
+                )
+                self._connection = connection_cls(
                     host,
                     self._url.port,
                     timeout=timeout,

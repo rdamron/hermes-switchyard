@@ -713,9 +713,16 @@ class ClientTests(unittest.TestCase):
             failing.decide("public", {"answer": {"type": "noul", "instructions": "Is the statement true?"}}, public_or_sanitized_data_ack=True)
         self.assertNotIn("fixture-key-value", str(caught.exception))
 
-    def test_arbitrary_endpoint_is_rejected(self):
-        with self.assertRaises(ValueError):
-            DecisionClient(api_key="test-key", endpoint="https://evil.example/decisions")
+    def test_non_http_endpoints_are_rejected(self):
+        for endpoint in ("ftp://evil.example/decisions", "evil.example/decisions"):
+            with self.subTest(endpoint=endpoint):
+                with self.assertRaises(ValueError):
+                    DecisionClient(api_key="test-key", endpoint=endpoint)
+
+    def test_arbitrary_http_endpoint_is_the_selfhosted_route(self):
+        client = DecisionClient(api_key="test-key", endpoint="https://evil.example/decisions")
+        self.assertEqual(client.endpoint, "https://evil.example/decisions")
+        client.close()
 
     def test_transport_payload_pins_provider_fallback_and_model(self):
         payloads = []
