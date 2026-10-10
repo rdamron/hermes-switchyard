@@ -354,5 +354,76 @@ class KeylessSelfhostedTests(unittest.TestCase):
         )
 
 
+class SelfhostedResponseContractTests(unittest.TestCase):
+    """Operator-run servers answer with their own model id and extra typed fields."""
+
+    @staticmethod
+    def _operator_transport(payload):
+        answers = {}
+        for name, question in payload["questions"].items():
+            if question["type"] == "choice":
+                answers[name] = {
+                    "type": "choice",
+                    "choice": "safe",
+                    "confidence": 0.55,
+                    "x_p_max": 0.77,
+                    "certainty": 0.23,
+                    "probabilities": {"safe": 0.77, "unsafe": 0.23},
+                }
+            else:
+                answers[name] = {"type": question["type"], "noul": 0.9, "x_p_max": 0.77}
+        return {"model": payload["model"], "answers": answers, "usage": {"input_tokens": 36, "output_tokens": 0}}
+
+    _CHOICE_QUESTIONS = {
+        "answer": {
+            "type": "choice",
+            "instructions": "Pick one.",
+            "criteria": {"safe": "the safe choice", "unsafe": "the unsafe choice"},
+        }
+    }
+
+    def test_selfhosted_consumes_closed_fields_and_drops_operator_extras(self):
+        client = DecisionClient(
+            api_key="",
+            endpoint=SELFHOSTED_ENDPOINT,
+            model=SELFHOSTED_MODEL,
+            transport=self._operator_transport,
+        )
+        result = client.decide("public", self._CHOICE_QUESTIONS, public_or_sanitized_data_ack=True)
+        self.assertEqual(result["model"], SELFHOSTED_MODEL)
+        self.assertEqual(
+            result["answers"]["answer"],
+            {"choice": "safe", "probabilities": {"safe": 0.77, "unsafe": 0.23}, "confidence": 0.55},
+        )
+        client.close()
+
+    def test_selfhosted_requires_the_server_to_echo_the_configured_model(self):
+        def wrong_model(payload):
+            return {**self._operator_transport(payload), "model": "not-the-configured-model"}
+
+        client = DecisionClient(
+            api_key="",
+            endpoint=SELFHOSTED_ENDPOINT,
+            model=SELFHOSTED_MODEL,
+            transport=wrong_model,
+        )
+        with self.assertRaises(ValueError):
+            client.decide("public", self._CHOICE_QUESTIONS, public_or_sanitized_data_ack=True)
+        client.close()
+
+    def test_hosted_routes_still_reject_unexpected_answer_fields(self):
+        from hermes_switchyard.client import DEFAULT_ENDPOINT
+
+        client = DecisionClient(
+            api_key="fixture",
+            endpoint=DEFAULT_ENDPOINT,
+            model="typesafe/jev-1.13",
+            transport=self._operator_transport,
+        )
+        with self.assertRaises(ValueError):
+            client.decide("public", self._CHOICE_QUESTIONS, public_or_sanitized_data_ack=True)
+        client.close()
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

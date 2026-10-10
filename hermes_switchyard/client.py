@@ -35,6 +35,16 @@ TYPESAFE_MODELS = frozenset({"jev-latest", "jev-1.13", "jev-1.13.0"})
 ALLOWED_ENDPOINTS = frozenset({DEFAULT_ENDPOINT, TYPESAFE_ENDPOINT})
 ALLOWED_MODELS = OPENROUTER_MODELS | TYPESAFE_MODELS
 EXPECTED_MODEL = "typesafe/jev-1.13"
+# Closed sets of answer fields the client consumes per question type. A
+# selfhosted server may attach further typed fields (calibration metadata and
+# the like); on that route the extra keys are dropped rather than refused, and
+# the consumed contract validated below is unchanged. Hosted routes keep
+# strict set equality.
+_SELFHOSTED_ANSWER_FIELDS = {
+    "choice": ("choice", "probabilities", "confidence"),
+    "score": ("score", "legend", "probabilities", "confidence"),
+    "noul": ("noul",),
+}
 
 
 def _selfhosted_endpoint(endpoint: Any) -> bool:
@@ -508,6 +518,7 @@ class DecisionClient:
         self.timeout = float(timeout)
         self.max_connection_idle_seconds = float(max_connection_idle_seconds)
         self.transport = transport
+        self._selfhosted = _selfhosted_endpoint(endpoint)
         self._url = urllib.parse.urlsplit(endpoint)
         self._connection: http.client.HTTPConnection | None = None
         self._connection_last_used: float | None = None
@@ -965,6 +976,12 @@ class DecisionClient:
                 if answer_type != question_type:
                     raise ValueError(f"Jev answer {name} type does not match the requested question")
                 answer = {key: value for key, value in answer.items() if key != "type"}
+            if self._selfhosted:
+                answer = {
+                    key: answer[key]
+                    for key in _SELFHOSTED_ANSWER_FIELDS[question_type]
+                    if key in answer
+                }
             if question_type == "choice":
                 if set(answer) != {"choice", "probabilities", "confidence"}:
                     raise ValueError(f"Jev choice {name} has unexpected response fields")
