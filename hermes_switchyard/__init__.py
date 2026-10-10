@@ -928,6 +928,10 @@ def _credential_ready(credential_presence: dict[str, bool], effective_provider: 
     A key for the other provider does not count: a route that resolves to one provider cannot
     use the other provider's key. When the route cannot be resolved, any key is accepted.
     """
+    if effective_provider == "selfhosted":
+        # A selfhosted route is the operator's own keyless server; no stored
+        # credential is required for the route to be ready.
+        return True
     if effective_provider in credential_presence:
         return bool(credential_presence[effective_provider])
     return any(credential_presence.values())

@@ -484,9 +484,10 @@ class DecisionClient:
         transport: Callable[[dict], dict] | None = None,
         max_connection_idle_seconds: float = MAX_CONNECTION_IDLE_SECONDS,
     ):
-        if type(api_key) is not str or not api_key.strip():
+        selfhosted = _selfhosted_endpoint(endpoint)
+        if not selfhosted and (type(api_key) is not str or not api_key.strip()):
             raise ValueError("Jev API key is required")
-        if endpoint not in ALLOWED_ENDPOINTS and not _selfhosted_endpoint(endpoint):
+        if endpoint not in ALLOWED_ENDPOINTS and not selfhosted:
             raise ValueError(
                 "Jev endpoint is not an evidence-backed fixed endpoint "
                 "or an operator-run http(s) endpoint"
@@ -810,10 +811,14 @@ class DecisionClient:
         if self._url.query:
             path += f"?{self._url.query}"
         headers = {
-            "Authorization": "Bearer " + self.api_key,
             "Content-Type": "application/json",
             "Connection": "keep-alive",
         }
+        # Hosted routes always carry a stored credential. A selfhosted route
+        # is the operator's own unauthenticated server and sends no
+        # Authorization header at all — not even an empty bearer token.
+        if self.api_key:
+            headers["Authorization"] = "Bearer " + self.api_key
         if self.endpoint == DEFAULT_ENDPOINT:
             headers.update(OPENROUTER_APP_HEADERS)
         allow_stale_retry = True

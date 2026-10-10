@@ -115,7 +115,8 @@ class SelfhostedClientEndpointTests(unittest.TestCase):
 
     def test_plaintext_selfhosted_endpoint_uses_the_http_connection_class(self):
         class _RecordingConnection(_FakeConnection):
-            pass
+            bodies: list = []
+            headers: list = []
 
         _RecordingConnection.response_body = json.dumps(
             {"model": SELFHOSTED_MODEL, "answers": {"answer": {"noul": 0.9}}, "usage": {}}
@@ -293,6 +294,64 @@ class SelfhostedRouteTests(unittest.TestCase):
             "endpoint": "https://openrouter.ai/api/alpha/decisions",
             "model": "typesafe/jev-1.13",
         })
+
+
+class KeylessSelfhostedTests(unittest.TestCase):
+    def test_keyless_selfhosted_sends_no_authorization_header(self):
+        class _RecordingConnection(_FakeConnection):
+            bodies: list = []
+            headers: list = []
+
+        _RecordingConnection.response_body = json.dumps(
+            {"model": SELFHOSTED_MODEL, "answers": {"answer": {"noul": 0.9}}, "usage": {}}
+        ).encode()
+        _install_fake_connection(self, _RecordingConnection)
+        client = DecisionClient(api_key="", endpoint=SELFHOSTED_ENDPOINT, model=SELFHOSTED_MODEL)
+        result = client.decide("public", _QUESTIONS, public_or_sanitized_data_ack=True)
+        self.assertEqual(result["model"], SELFHOSTED_MODEL)
+        self.assertNotIn("Authorization", _RecordingConnection.headers[0])
+        self.assertEqual(_RecordingConnection.headers[0]["Content-Type"], "application/json")
+        client.close()
+
+    def test_operator_credential_is_still_forwarded_when_provided(self):
+        class _RecordingConnection(_FakeConnection):
+            bodies: list = []
+            headers: list = []
+
+        _RecordingConnection.response_body = json.dumps(
+            {"model": SELFHOSTED_MODEL, "answers": {"answer": {"noul": 0.9}}, "usage": {}}
+        ).encode()
+        _install_fake_connection(self, _RecordingConnection)
+        client = DecisionClient(
+            api_key="operator-key", endpoint=SELFHOSTED_ENDPOINT, model=SELFHOSTED_MODEL
+        )
+        client.decide("public", _QUESTIONS, public_or_sanitized_data_ack=True)
+        self.assertEqual(_RecordingConnection.headers[0].get("Authorization"), "Bearer operator-key")
+        client.close()
+
+    def test_empty_credential_stays_required_on_hosted_routes(self):
+        from hermes_switchyard.client import DEFAULT_ENDPOINT
+
+        with self.assertRaises(ValueError):
+            DecisionClient(api_key="", endpoint=DEFAULT_ENDPOINT, model="typesafe/jev-1.13")
+
+    def test_selfhosted_route_is_ready_without_stored_credentials(self):
+        exposure = {"tools": {"jev_assess": {"registered": True, "callable": True}}}
+        self.assertEqual(
+            hermes_switchyard._overall_status(
+                {"typesafe": False, "openrouter": False}, exposure, "selfhosted"
+            ),
+            "ready",
+        )
+        self.assertTrue(
+            hermes_switchyard._credential_ready({"typesafe": False, "openrouter": False}, "selfhosted")
+        )
+        self.assertEqual(
+            hermes_switchyard._overall_status(
+                {"typesafe": False, "openrouter": False}, exposure, "openrouter"
+            ),
+            "credential_required",
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover
