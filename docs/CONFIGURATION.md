@@ -32,17 +32,17 @@ An empty string (`""`) or empty list (`[]`) means "nothing configured." The defa
 | Stop sending message text for effort decisions | `adaptive_reasoning_effort` | `false` |
 | Always use my `/reasoning` level (no lowering) | `adaptive_reasoning_effort_mode` | `pinned` |
 | Hide the `Reasoning: …` line under replies | `adaptive_reasoning_effort_receipt_mode` | `off` |
-| Use a specific Jev provider | `jev_provider` | `typesafe` or `openrouter` |
+| Use a specific Jev provider | `jev_provider` | `typesafe`, `openrouter`, or `selfhosted` |
 
 ## Provider and connection
 
 | Key | Default | What it does |
 | --- | --- | --- |
-| `jev_provider` | `auto` | Which provider to call. `auto` uses TypeSafe when a TypeSafe key exists, otherwise OpenRouter. You can also set `typesafe` or `openrouter`. |
-| `api_endpoint` | `https://openrouter.ai/api/alpha/decisions` | The Jev endpoint. Only the fixed TypeSafe (`https://api.typesafe.ai/v1/systemone`) and OpenRouter endpoints are accepted; anything else is refused. |
-| `jev_model` | `""` | Jev model alias. Leave empty to use the provider default: `jev-latest` on TypeSafe, `typesafe/jev-1.13` on OpenRouter. |
+| `jev_provider` | `auto` | Which provider to call. `auto` uses TypeSafe when a TypeSafe key exists, otherwise OpenRouter. You can also set `typesafe`, `openrouter`, or `selfhosted`. |
+| `api_endpoint` | `https://openrouter.ai/api/alpha/decisions` | The Jev endpoint. The fixed TypeSafe (`https://api.typesafe.ai/v1/systemone`) and OpenRouter endpoints are always accepted. Any absolute http(s) URL is accepted as a `selfhosted` endpoint: your own Jev server on your own network, so decisions never leave it and nothing is sent to TypeSafe or OpenRouter. Values that are not absolute http(s) URLs are refused. |
+| `jev_model` | `""` | Jev model alias. Leave empty to use the provider default: `jev-latest` on TypeSafe, `typesafe/jev-1.13` on OpenRouter. A `selfhosted` route has no default — set `jev_model` to the model your server resolves; every response must echo it exactly. |
 
-API keys are **not** settings. Save them with `hermes switchyard setup --provider typesafe` (or `openrouter`), which uses a masked prompt.
+API keys are **not** settings. Save them with `hermes switchyard setup --provider typesafe` (or `openrouter`), which uses a masked prompt. A `selfhosted` route needs no key.
 
 ## Adaptive reasoning effort
 

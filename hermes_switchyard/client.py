@@ -482,7 +482,7 @@ class PartialAccountingError(RuntimeError):
 
 
 class DecisionClient:
-    """Call one of the fixed Jev endpoints and require exact model resolution."""
+    """Call the configured Jev endpoint (a hosted fixed pair or an operator-run selfhosted server) and require exact model resolution."""
 
     def __init__(
         self,

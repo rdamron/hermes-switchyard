@@ -235,6 +235,7 @@ The defaults work for most people. These are the settings you're most likely to 
 | Never lower my `/reasoning` level | `hermes config set plugins.entries.hermes-switchyard.settings.adaptive_reasoning_effort_mode pinned` |
 | Hide the `Reasoning: …` line | `/switchyard effort receipt off` (saved for future sessions) |
 | Choose a provider explicitly | `hermes config set plugins.entries.hermes-switchyard.settings.jev_provider typesafe` (or `openrouter`) |
+| Use your own Jev server (selfhosted) | set `api_endpoint` to your server's absolute http(s) URL and `jev_model` to the model it resolves |
 
 Start a fresh session after any change. Every setting, grouped by feature and explained: [Configuration reference](docs/CONFIGURATION.md).
 
