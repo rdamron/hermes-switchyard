@@ -90,8 +90,9 @@ _REGISTERED_HANDLERS: dict[str, Any] = {}
 # instead of any key. Set by register(); absent in a process where register() never ran.
 _ROUTE_STATUS: dict[str, Any] = {}
 
-# Providers a Jev route can resolve to, each with its own credential.
-PROVIDERS = ("typesafe", "openrouter")
+# Providers a Jev route can resolve to, each with its own credential. Selfhosted is
+# keyless: it resolves like the hosted pair but has no stored credential to check.
+PROVIDERS = ("typesafe", "openrouter", "selfhosted")
 
 
 def reset_runtime_status() -> None:
