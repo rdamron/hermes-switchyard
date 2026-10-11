@@ -1752,12 +1752,19 @@ class ApprovalClient:
     HERMES_SKIP_ASYNC_WRAP = True
 
     def __init__(
-        self, *, api_key="", base_url="", timeout=0.8, enabled=lambda: False, **_
+        self, *, api_key="", base_url="", timeout=0.8, enabled=lambda: False,
+        route: Any = None, **_
     ):
         if base_url and base_url.rstrip("/") != DEFAULT_ENDPOINT:
             raise ValueError("unsupported approval endpoint")
         self.api_key, self.base_url = api_key, DEFAULT_ENDPOINT
         self.enabled = enabled
+        # The plugin's live route resolver, resolved per review. An invalid
+        # route must fail the review here rather than at construction: Hermes
+        # answers a failing provider client with a plain hosted client, which
+        # would send the review to the hosted endpoint the operator did not
+        # configure.
+        self._route = route
         self.timeout = _approval_timeout(0.8 if timeout is None else timeout)
         self.is_closed = False
         self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.create))
@@ -1776,7 +1783,18 @@ class ApprovalClient:
     ):
         if self.enabled() is not True:
             raise ValueError("smart approval provider disabled")
-        if model not in {"typesafe/jev-1.13", "typesafe/jev-1.13-20260917"}:
+        endpoint, credential, approval_model = self.base_url, self.api_key, model
+        if callable(self._route):
+            route_endpoint, route_model, route_provider = self._route()
+            if route_provider == "selfhosted":
+                # The operator's own keyless server reviews on the operator
+                # network: no credential is forwarded (not even one the host
+                # supplied for the hosted mirror), and the model is the one
+                # the operator configured, which the server must echo exactly.
+                endpoint, credential, approval_model = route_endpoint, "", route_model
+        if endpoint == DEFAULT_ENDPOINT and model not in {
+            "typesafe/jev-1.13", "typesafe/jev-1.13-20260917"
+        }:
             raise ValueError("unsupported approval model")
         if (
             stream
@@ -1804,9 +1822,8 @@ class ApprovalClient:
         command = untrusted.split("<command>\n", 1)[1].split("\n</command>", 1)[0]
         policy = trusted.split(POLICY_MARKER, 1)[1] if POLICY_MARKER in trusted else ""
         deadline = self.timeout if timeout is None else _approval_timeout(timeout)
-        credential = self.api_key
         client = DecisionClient(
-            api_key=credential, endpoint=DEFAULT_ENDPOINT, model=model
+            api_key=credential, endpoint=endpoint, model=approval_model
         )
         try:
             row = review_command(
@@ -1838,7 +1855,7 @@ class ApprovalClient:
         )
         return SimpleNamespace(
             id="switchyard-approval",
-            model=model,
+            model=approval_model,
             choices=[
                 SimpleNamespace(
                     message=SimpleNamespace(content=row["verdict"], role="assistant"),
@@ -1856,14 +1873,23 @@ class ApprovalClient:
         )
 
 
-def register_approval_provider(enabled):
-    """Register through Hermes' public provider registry, without replacing a provider."""
+def register_approval_provider(enabled, route=None):
+    """Register through Hermes' public provider registry, without replacing a provider.
+
+    ``route`` is the plugin's live route resolver; the approval client follows
+    it per review, so a selfhosted route reviews on the operator's own endpoint
+    with no credential. The upstream ``OPENROUTER_API_KEY`` declaration stays
+    unconditional: Hermes' registry mirror drops api_key profiles that declare
+    no env vars, and its auxiliary gate requires a non-empty key before it will
+    construct the plugin client at all. On a selfhosted route that stored value
+    is never sent anywhere — keylessness is enforced on the wire.
+    """
     from providers import register_provider
     from providers.base import ProviderProfile
 
     class Profile(ProviderProfile):
         def create_client(self, **kwargs):
-            return ApprovalClient(enabled=enabled, **kwargs)
+            return ApprovalClient(enabled=enabled, route=route, **kwargs)
 
     register_provider(
         Profile(

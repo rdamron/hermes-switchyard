@@ -88,7 +88,7 @@ class SelfhostedEndpointPredicateTests(unittest.TestCase):
 class SelfhostedClientEndpointTests(unittest.TestCase):
     def test_selfhosted_endpoint_and_operator_model_are_accepted(self):
         client = DecisionClient(
-            api_key="operator-key",
+            api_key="test-key",
             endpoint=SELFHOSTED_ENDPOINT,
             model=SELFHOSTED_MODEL,
         )
@@ -101,7 +101,7 @@ class SelfhostedClientEndpointTests(unittest.TestCase):
             with self.subTest(endpoint=endpoint):
                 with self.assertRaises(ValueError):
                     DecisionClient(
-                        api_key="operator-key",
+                        api_key="test-key",
                         endpoint=endpoint,
                         model=SELFHOSTED_MODEL,
                     )
@@ -123,7 +123,7 @@ class SelfhostedClientEndpointTests(unittest.TestCase):
         ).encode()
         _install_fake_connection(self, _RecordingConnection)
         client = DecisionClient(
-            api_key="operator-key",
+            api_key="test-key",
             endpoint=SELFHOSTED_ENDPOINT,
             model=SELFHOSTED_MODEL,
         )
@@ -323,10 +323,10 @@ class KeylessSelfhostedTests(unittest.TestCase):
         ).encode()
         _install_fake_connection(self, _RecordingConnection)
         client = DecisionClient(
-            api_key="operator-key", endpoint=SELFHOSTED_ENDPOINT, model=SELFHOSTED_MODEL
+            api_key="test-key", endpoint=SELFHOSTED_ENDPOINT, model=SELFHOSTED_MODEL
         )
         client.decide("public", _QUESTIONS, public_or_sanitized_data_ack=True)
-        self.assertEqual(_RecordingConnection.headers[0].get("Authorization"), "Bearer operator-key")
+        self.assertEqual(_RecordingConnection.headers[0].get("Authorization"), "Bearer test-key")
         client.close()
 
     def test_empty_credential_stays_required_on_hosted_routes(self):
@@ -423,6 +423,187 @@ class SelfhostedResponseContractTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             client.decide("public", self._CHOICE_QUESTIONS, public_or_sanitized_data_ack=True)
         client.close()
+
+
+class SelfhostedApprovalTests(unittest.TestCase):
+    """switchyard-approvals follows the configured selfhosted route."""
+
+    @staticmethod
+    def _messages():
+        return [
+            {"role": "system", "content": "You are a security reviewer for an AI coding agent."},
+            {"role": "user", "content": "review\n<command>\necho hi\n</command>"},
+        ]
+
+    @staticmethod
+    def _review_row():
+        return {
+            "verdict": "allow",
+            "review_attempted": True,
+            "request_count": 1,
+            "reason": "fixture",
+            "usage": {},
+        }
+
+    def test_selfhosted_route_replaces_the_hardcoded_hosted_endpoint(self):
+        from hermes_switchyard import approval_review
+
+        captured = {}
+
+        class _FakeDecision:
+            def __init__(self, *, api_key, endpoint, model, **_kwargs):
+                captured.update(api_key=api_key, endpoint=endpoint, model=model)
+
+            def close(self):
+                pass
+
+        def _fake_review(_command, **_kwargs):
+            return self._review_row()
+
+        with mock.patch.object(approval_review, "DecisionClient", _FakeDecision), \
+                mock.patch.object(approval_review, "review_command", _fake_review):
+            approval_client = approval_review.ApprovalClient(
+                enabled=lambda: True,
+                route=lambda: (SELFHOSTED_ENDPOINT, SELFHOSTED_MODEL, "selfhosted"),
+            )
+            approval_client.create(
+                messages=self._messages(), model="typesafe/jev-1.13", timeout=2.0
+            )
+        self.assertEqual(captured["endpoint"], SELFHOSTED_ENDPOINT)
+        self.assertEqual(captured["model"], SELFHOSTED_MODEL)
+        self.assertEqual(captured["api_key"], "")
+
+    def test_hosted_approval_route_is_unchanged(self):
+        from hermes_switchyard import approval_review
+        from hermes_switchyard.client import DEFAULT_ENDPOINT
+
+        captured = {}
+
+        class _FakeDecision:
+            def __init__(self, *, api_key, endpoint, model, **_kwargs):
+                captured.update(api_key=api_key, endpoint=endpoint, model=model)
+
+            def close(self):
+                pass
+
+        def _fake_review(_command, **_kwargs):
+            return self._review_row()
+
+        with mock.patch.object(approval_review, "DecisionClient", _FakeDecision), \
+                mock.patch.object(approval_review, "review_command", _fake_review):
+            approval_client = approval_review.ApprovalClient(
+                api_key="fixture-key", enabled=lambda: True
+            )
+            approval_client.create(messages=self._messages(), model="typesafe/jev-1.13", timeout=2.0)
+        self.assertEqual(captured["endpoint"], DEFAULT_ENDPOINT)
+        self.assertEqual(captured["model"], "typesafe/jev-1.13")
+        self.assertEqual(captured["api_key"], "fixture-key")
+
+    def test_selfhosted_registration_keeps_the_upstream_env_var_declaration(self):
+        """The env var stays declared even on a selfhosted route.
+
+        Hermes' registry mirror silently drops api_key profiles that declare no
+        env vars, and its auxiliary gate refuses an empty key before the plugin
+        client is ever constructed. The stored value is never sent on a
+        selfhosted route — keylessness is enforced on the wire.
+        """
+        from hermes_switchyard import approval_review
+
+        try:
+            import providers  # noqa: F401
+        except ImportError:
+            self.skipTest("Hermes provider registry is not importable")
+
+        captured = {}
+
+        def _capture(profile):
+            captured["profile"] = profile
+
+        with mock.patch("providers.register_provider", _capture):
+            approval_review.register_approval_provider(
+                lambda: True,
+                route=lambda: (SELFHOSTED_ENDPOINT, SELFHOSTED_MODEL, "selfhosted"),
+            )
+        self.assertEqual(captured["profile"].env_vars, ("OPENROUTER_API_KEY",))
+
+        with mock.patch("providers.register_provider", _capture):
+            approval_review.register_approval_provider(
+                lambda: True,
+                route=lambda: (
+                    "https://openrouter.ai/api/alpha/decisions",
+                    "typesafe/jev-1.13",
+                    "openrouter",
+                ),
+            )
+        self.assertEqual(captured["profile"].env_vars, ("OPENROUTER_API_KEY",))
+
+    def test_plugin_registration_passes_the_selfhosted_route_to_the_registry(self):
+        from hermes_switchyard import approval_review
+
+        try:
+            import providers  # noqa: F401
+        except ImportError:
+            self.skipTest("Hermes provider registry is not importable")
+
+        captured = {}
+
+        def _capture(profile):
+            captured["profile"] = profile
+
+        context = _Context({
+            "api_endpoint": SELFHOSTED_ENDPOINT,
+            "jev_model": SELFHOSTED_MODEL,
+            "smart_approval_provider": True,
+            "public_or_sanitized_data_ack": True,
+        })
+        with mock.patch("providers.register_provider", _capture), \
+                mock.patch.object(hermes_switchyard, "DecisionClient", _CaptureClient), \
+                mock.patch.object(hermes_switchyard, "_secret", side_effect=lambda _provider: ""):
+            hermes_switchyard.register(context)
+        self.assertEqual(captured["profile"].env_vars, ("OPENROUTER_API_KEY",))
+        self.assertIsInstance(captured["profile"].create_client(), approval_review.ApprovalClient)
+
+    def test_unresolvable_route_fails_the_review_without_a_hosted_fallback(self):
+        """A route that cannot resolve escalates instead of egressing externally."""
+        from hermes_switchyard import approval_review
+
+        with mock.patch.object(approval_review, "DecisionClient") as decision, \
+                mock.patch.object(approval_review, "review_command"):
+            approval_client = approval_review.ApprovalClient(
+                enabled=lambda: True,
+                route=mock.Mock(side_effect=ValueError("no operator-run api_endpoint")),
+            )
+            with self.assertRaises(ValueError):
+                approval_client.create(
+                    messages=self._messages(), model="typesafe/jev-1.13", timeout=2.0
+                )
+        decision.assert_not_called()
+
+    def test_selfhosted_route_ignores_the_hosted_approval_aliases(self):
+        """The host's hosted approval alias does not gate a selfhosted review."""
+        from hermes_switchyard import approval_review
+
+        captured = {}
+
+        class _FakeDecision:
+            def __init__(self, *, api_key, endpoint, model, **_kwargs):
+                captured.update(api_key=api_key, endpoint=endpoint, model=model)
+
+            def close(self):
+                pass
+
+        with mock.patch.object(approval_review, "DecisionClient", _FakeDecision), \
+                mock.patch.object(
+                    approval_review, "review_command", lambda _c, **_kw: self._review_row()
+                ):
+            approval_client = approval_review.ApprovalClient(
+                enabled=lambda: True,
+                route=lambda: (SELFHOSTED_ENDPOINT, SELFHOSTED_MODEL, "selfhosted"),
+            )
+            approval_client.create(
+                messages=self._messages(), model="guard/local-alias", timeout=2.0
+            )
+        self.assertEqual(captured["model"], SELFHOSTED_MODEL)
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -1676,7 +1676,10 @@ def register(ctx):
     standing_ack = setting_bool("public_or_sanitized_data_ack", True)
     if setting_bool("smart_approval_provider", False) and standing_ack:
         from .approval_review import register_approval_provider
-        register_approval_provider(lambda: setting_bool("smart_approval_provider", False) and setting_bool("public_or_sanitized_data_ack", True))
+        register_approval_provider(
+            lambda: setting_bool("smart_approval_provider", False) and setting_bool("public_or_sanitized_data_ack", True),
+            route=_route,
+        )
     if setting_bool("consequential_tool_gate", False) and callable(getattr(ctx, "register_hook", None)):
         from .approval_review import pre_tool_gate
         ctx.register_hook("pre_tool_call", pre_tool_gate)
