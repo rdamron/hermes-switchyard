@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import socket
 import sys
 from pathlib import Path
@@ -45,8 +46,55 @@ def _shadow(registry, name, toolset):
     )
 
 
+def _activate_hermes_dependencies(hermes_root: str) -> None:
+    """Activate Hermes' PM dependency environment the way hermes_bootstrap does.
+
+    A fresh disposable HERMES_HOME borrows the checkout, and the checkout's
+    managed interpreter relaunches into a bare store Python that carries no
+    third-party dependencies. Without this activation, ``import model_tools``
+    dies on the first dependency import regardless of plugin correctness.
+    """
+    root = Path(hermes_root)
+    sys.path.insert(0, str(root))
+    try:
+        from pm.environments import activate_dependencies
+
+        activate_dependencies(root)
+    except Exception:
+        # Degrade, never brick: the runner interpreter was already proven able
+        # to import Hermes (its own dependency environment), so activation is
+        # only load-bearing for bare store interpreters. A home whose recorded
+        # venv is missing (e.g. ensure-toolsets mutated it first) must not turn
+        # into a probe crash.
+        pass
+
+
+def _hermes_root() -> str:
+    """The Hermes checkout whose dependency environment to activate.
+
+    Candidates in order: an explicit ``SWITCHYARD_HERMES_ROOT``, a checkout on
+    ``PYTHONPATH``, then the default install location — the disposable
+    ``HERMES_HOME`` itself never contains the checkout, so a HERMES_HOME-relative
+    candidate is only used when it actually looks like one.
+    """
+    candidates = []
+    from_env = os.environ.get("SWITCHYARD_HERMES_ROOT")
+    if from_env:
+        candidates.append(Path(from_env))
+    pythonpath = os.environ.get("PYTHONPATH", "")
+    candidates.extend(Path(entry) for entry in pythonpath.split(os.pathsep) if entry)
+    home = os.environ.get("HERMES_HOME")
+    candidates.append((Path(home) if home else Path.home() / ".hermes") / "hermes-agent")
+    candidates.append(Path.home() / ".hermes" / "hermes-agent")
+    for candidate in candidates:
+        if (candidate / "model_tools.py").is_file():
+            return str(candidate)
+    return str(candidates[-1])
+
+
 def main() -> int:
     scenario = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+    _activate_hermes_dependencies(_hermes_root())
     socket.create_connection = _deny_network
     socket.socket.connect = _deny_network
     socket.socket.connect_ex = _deny_network

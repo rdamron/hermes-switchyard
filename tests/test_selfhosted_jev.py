@@ -354,6 +354,21 @@ class KeylessSelfhostedTests(unittest.TestCase):
         )
 
 
+class SelfhostedProviderTupleTests(unittest.TestCase):
+    """P1.1/P1.2 — selfhosted is a first-class entry in the public tuple."""
+
+    def test_providers_tuple_ends_with_selfhosted_in_order(self):
+        self.assertEqual(
+            hermes_switchyard.PROVIDERS, ("typesafe", "openrouter", "selfhosted")
+        )
+
+    def test_selfhosted_iterates_as_a_plain_provider_name(self):
+        for provider in hermes_switchyard.PROVIDERS:
+            with self.subTest(provider=provider):
+                self.assertIsInstance(provider, str)
+                self.assertTrue(provider)
+
+
 class SelfhostedResponseContractTests(unittest.TestCase):
     """Operator-run servers answer with their own model id and extra typed fields."""
 
@@ -409,6 +424,45 @@ class SelfhostedResponseContractTests(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             client.decide("public", self._CHOICE_QUESTIONS, public_or_sanitized_data_ack=True)
+        client.close()
+
+    def test_selfhosted_refuses_answers_missing_a_required_consumed_field(self):
+        """P5.4 — tolerance adds accepted fields; it never relaxes the required ones."""
+        def missing_noul(payload):
+            return {
+                "model": payload["model"],
+                "answers": {"answer": {"type": "noul", "confidence": 0.5}},
+                "usage": {},
+            }
+
+        client = DecisionClient(
+            api_key="",
+            endpoint=SELFHOSTED_ENDPOINT,
+            model=SELFHOSTED_MODEL,
+            transport=missing_noul,
+        )
+        with self.assertRaises(ValueError):
+            client.decide("public", _QUESTIONS, public_or_sanitized_data_ack=True)
+        client.close()
+
+    def test_selfhosted_route_rejects_redirect_responses(self):
+        """P4.6 — redirects fail closed on operator endpoints too, like hosted."""
+        from hermes_switchyard.client import JevRequestError
+
+        class _RedirectConnection(_FakeConnection):
+            bodies: list = []
+            headers: list = []
+
+            def getresponse(self):
+                return _FakeResponse(b"", status=302)
+
+        _install_fake_connection(self, _RedirectConnection)
+        client = DecisionClient(
+            api_key="", endpoint=SELFHOSTED_ENDPOINT, model=SELFHOSTED_MODEL
+        )
+        with self.assertRaises(JevRequestError) as raised:
+            client.decide("public", _QUESTIONS, public_or_sanitized_data_ack=True)
+        self.assertEqual(raised.exception.detail, "redirect")
         client.close()
 
     def test_hosted_routes_still_reject_unexpected_answer_fields(self):
@@ -604,6 +658,39 @@ class SelfhostedApprovalTests(unittest.TestCase):
                 messages=self._messages(), model="guard/local-alias", timeout=2.0
             )
         self.assertEqual(captured["model"], SELFHOSTED_MODEL)
+
+
+    def test_route_resolver_is_invoked_per_review_not_cached_at_construction(self):
+        """A config change between reviews must be honored, so the route is
+        resolved on every create() — never once at client construction."""
+        from hermes_switchyard import approval_review
+
+        route = mock.Mock(
+            return_value=(SELFHOSTED_ENDPOINT, SELFHOSTED_MODEL, "selfhosted")
+        )
+
+        class _FakeDecision:
+            def __init__(self, *, api_key, endpoint, model, **_kwargs):
+                pass
+
+            def close(self):
+                pass
+
+        with mock.patch.object(approval_review, "DecisionClient", _FakeDecision), \
+                mock.patch.object(
+                    approval_review, "review_command", lambda _c, **_kw: self._review_row()
+                ):
+            approval_client = approval_review.ApprovalClient(
+                enabled=lambda: True, route=route
+            )
+            self.assertEqual(
+                route.call_count, 0, "route must not be resolved at construction"
+            )
+            for _ in range(2):
+                approval_client.create(
+                    messages=self._messages(), model="typesafe/jev-1.13", timeout=2.0
+                )
+        self.assertEqual(route.call_count, 2, "route must be resolved once per review")
 
 
 if __name__ == "__main__":  # pragma: no cover
